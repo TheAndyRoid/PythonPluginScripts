@@ -17,6 +17,7 @@ import time
 
 class MyIRC(Thread):
     isRunning = True
+    debug = False
     client = 0
     connection = 0
     isConnected = False
@@ -58,15 +59,16 @@ class MyIRC(Thread):
     def on_mode(self,connection, event):
         #add to list of opers
         self.op_list.add(event.arguments[1])
-        print (event.arguments[1])
+        if self.debug:
+            print (event.arguments[1])
 
     def on_unknowncommand(self,connection, event):
         print ("Error")
         print (event.arguments)
 
     def on_privmsg(self,connection, event):
-        print("privmsg")
         self.print_event(event)
+        pass
 
 
     def disconnect(self):
@@ -90,6 +92,9 @@ class MyIRC(Thread):
             print("Login unsuccessful")
 
     def print_event(self,event):
+        if not self.debug:
+            return
+        
         print("#######")
         try:
             print(event.type)
