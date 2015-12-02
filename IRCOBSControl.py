@@ -231,6 +231,10 @@ class gui:
         defaultHeight = 0
         parent = config.GetParent()
 
+        #This setting allows the source to reload the script when you disable
+        # or enable the script. Useful for development
+        config.SetInt("Debug",1)
+
         #you are expected to reset the width and height
         #to the render size for scaling to work after properties
         parent.SetFloat("cx",defaultWidth)
