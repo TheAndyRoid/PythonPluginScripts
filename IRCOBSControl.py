@@ -17,12 +17,12 @@ import time
 
 class MyIRC(Thread):
     isRunning = True
-    debug = False
+    debug = True
     client = 0
     connection = 0
     isConnected = False
     command =  0
-    ratelimit = 30
+    ratelimit = 3 #seconds
     spacestring = ""
     def __init__(self,qSend,qRecv,server,port,username,password,targetChannel):
         super(MyIRC, self).__init__()
@@ -34,6 +34,7 @@ class MyIRC(Thread):
         self.qSend = qSend
         self.qRecv = qRecv
         self.op_list = {'andyroid'} #op status is not instant
+        self.lastSent = time.time()
 
     def connect(self):
         print ("Connecting")
@@ -123,20 +124,31 @@ class MyIRC(Thread):
         self.print_event(event)
 
         if username in self.op_list:
-            if event.arguments[0].split()[0] == "!obs":
+            if event.arguments[0].split()[0].lower() == "!obs":
                 self.qRecv.put(event.arguments[0])
 
     def processIRC(self):
         if(self.isConnected):
             self.client.process_once()
             #process messages to send
-            if not self.qSend.empty():
+            if not self.qSend.empty() and time.time() > self.lastSent:
                 text = self.qSend.get()
                 if text == "quit":
                     self.isRunning = False
                     return
                 self.connection.privmsg(self.target,text)
-                time.sleep(3) #crude but effective rate limit
+                self.lastSent = time.time() + self.ratelimit
+            elif not self.qSend.empty():
+                #dump messages but check for quit
+                while not self.qSend.empty():
+                    text = self.qSend.get()
+                    if text == "quit":
+                        self.isRunning = False
+                        return
+            else:
+                return
+
+
 
     def run(self):
         self.connect() #connect to the server
@@ -166,6 +178,13 @@ class IRCOBSControl(OBS.ImageSource):
         self.myirc = MyIRC(self.qSend,self.qRecv,servername,port,username,password,target)
         self.myirc.start()
 
+        self.commandToFunc = {"gamma": self.setSourceGamma,
+                              "scene": self.changeScene,
+                              "hide": self.sceneItemVisableHide,
+                              "show": self.sceneItemVisableShow,
+                              "list": self.listItems}
+
+
     def EndScene(self):
         OBS.Log(u"endScene")
 
@@ -183,41 +202,88 @@ class IRCOBSControl(OBS.ImageSource):
     def GlobalSourceEnterScene(self):
         pass
 
-    def processCommand(self,command):
-        
-        if command[1] == "gamma":
-            try:
-                value = int(command[2])
-            except:
-                return
-            sourceName = "DayZ" #The source that will have it's gamma changed
-            sceneElement = OBS.GetSceneElement()
-            sourcesElement = sceneElement.GetElement("sources")
-            gameElement = sourcesElement.GetElement(sourceName)
-            if not gameElement:
-                return
-            globalSource = gameElement.GetString("class")
-            if globalSource == "GlobalSource":
-                print("got a global source")
-                globalSourceName = gameElement.GetElement("data").GetString("name")
-                
-                globalElement = OBS.GetGlobalSourceListElement()
+    def sceneItemVisableHide(self,command):
+        self.sceneItemVisable(command,False)
+        pass
 
-                sourceElement = globalElement.GetElement(globalSourceName)
-                sourceElement.GetElement("data").SetInt("gamma",value)
-                # you will need to go into the properties of the source to update
-                # the gamma not sure why, obsv1 handels global sources weirdly
-            else:
-                v = gameElement.GetElement("data").SetInt("gamma",value)
-                #let chat know that the setting change has been made
-                self.qSend.put("Set "+sourceName+" gamma to " + str(value) + " ( Cooldown "+ str(self.commandCooldown) + " seconds )")
-                self.lastCommand = time.time() + self.commandCooldown 
-                
-            OBS.EnterSceneMutex()
-            OBS.GetScene().GetSceneItemByName(sourceName).UpdateSettings()
-            OBS.LeaveSceneMutex()
+    def sceneItemVisableShow(self,command):
+        self.sceneItemVisable(command,True)
+        pass
+
+    def sceneItemVisable(self,command,value):
+        sourceName = " ".join(command)
+        sceneItem = OBS.GetScene().GetSceneItemByName(sourceName)
+        if not sceneItem:
+            return
+        sceneItem.SetRender(value)       
+
+        
+    def listItems(self,command):
+        value = command[0]
+        
+        if value == "scenes":
+            sceneListElement = OBS.GetSceneListElement()
+            print(sceneListElement.GetName())
+            sceneList = []
+            for i in range(0,sceneListElement.NumElements()):
+                sceneList.append(sceneListElement.GetElementByID(i).GetName())
+            self.qSend.put("Available scenes: " +str(sceneList))
+            pass
+        elif value == "sources":
+            scene = OBS.GetScene()
+            sourceList = []
+            for i in range(0,scene.NumSceneItems()):
+                sourceList.append(scene.GetSceneItemByID(i).GetName())
+            self.qSend.put("Available sources: " +str(sourceList))
+        else:
+            return
+
+    def changeScene(self,command):
+        sceneName = " ".join(command)
+        OBS.SetScene(sceneName,False)
+
+    def setSourceGamma(self,command):
+
+        try:
+            sourceName = " ".join(command[:(len(command)-1)])
+            value = int(command[len(command)-1])
+        except:
+            return
+
+        sceneElement = OBS.GetSceneElement()
+        sourcesElement = sceneElement.GetElement("sources")
+        gameElement = sourcesElement.GetElement(sourceName)
+        if not gameElement:
+            return
+        globalSource = gameElement.GetString("class")
+        if globalSource == "GlobalSource":
+            print("got a global source")
+            globalSourceName = gameElement.GetElement("data").GetString("name")
+
+            globalElement = OBS.GetGlobalSourceListElement()
+
+            sourceElement = globalElement.GetElement(globalSourceName)
+            sourceElement.GetElement("data").SetInt("gamma",value)
+            # you will need to go into the properties of the source to update
+            # the gamma not sure why, obsv1 handels global sources weirdly
+        else:
+            v = gameElement.GetElement("data").SetInt("gamma",value)
+            #let chat know that the setting change has been made
+            self.qSend.put("Set "+sourceName+" gamma to " + str(value) + " ( Cooldown "+ str(self.commandCooldown) + " seconds )")
+            self.lastCommand = time.time() + self.commandCooldown 
+
+        OBS.EnterSceneMutex()
+        OBS.GetScene().GetSceneItemByName(sourceName).UpdateSettings()
+        OBS.LeaveSceneMutex()
+
+    def processCommand(self,command):        
+
+        commandName = command[1]
+        remaining = command[2:]
+        print(commandName)
+        if commandName in self.commandToFunc:
+            self.commandToFunc[commandName](remaining)
             
-            print(command)
     
     def Tick(self,seconds):
         while not self.qRecv.empty():
